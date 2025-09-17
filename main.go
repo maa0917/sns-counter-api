@@ -6,19 +6,27 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/joho/godotenv"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"cloud.google.com/go/compute/metadata"
+	"cloud.google.com/go/firestore"
 )
 
 type APIKey struct {
-	TenantID   string
-	Name       string
-	IgUserID   string
-	SecretHash string
-	IsActive   bool
+	TenantID   string `firestore:"tenant_id"`
+	Name       string `firestore:"name"`
+	IgUserID   string `firestore:"ig_user_id"`
+	SecretHash string `firestore:"secret_hash"`
+	IsActive   bool   `firestore:"is_active"`
 }
+
+var firestoreClient *firestore.Client
 
 func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -70,37 +78,64 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+func getProjectID() (string, error) {
+	if metadata.OnGCE() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if id, err := metadata.ProjectIDWithContext(ctx); err == nil {
+			return id, nil
+		}
+		return "", errors.New("failed to get project ID from GCE metadata service")
+	}
+
+	if id := os.Getenv("GCP_PROJECT_ID"); id != "" {
+		return id, nil
+	}
+	return "", errors.New("GCP_PROJECT_ID environment variable is required for local development")
+}
+
+func initFirestore() error {
+	ctx := context.Background()
+
+	projectID, err := getProjectID()
+	if err != nil {
+		return fmt.Errorf("project ID resolution failed: %v", err)
+	}
+
+	client, err := firestore.NewClient(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("failed to create Firestore client: %v", err)
+	}
+
+	firestoreClient = client
+	return nil
+}
+
 func validateBearerToken(token string) (*APIKey, error) {
 	tenantID, secret, err := parseToken(token)
 	if err != nil {
 		return nil, err
 	}
 
-	// モックapi_keysコレクション構造
-	mockAPIKeys := map[string]APIKey{
-		"tenant123": {
-			TenantID:   "tenant123",
-			Name:       "Test Corp",
-			IgUserID:   "12345",
-			SecretHash: hashSecret("a1b2c3d4e5f6g7h8"),
-			IsActive:   true,
-		},
-		"demo456": {
-			TenantID:   "demo456",
-			Name:       "Demo Company",
-			IgUserID:   "67890",
-			SecretHash: hashSecret("x9y8z7w6v5u4t3s2"),
-			IsActive:   true,
-		},
+	if firestoreClient == nil {
+		return nil, errors.New("firestore not configured")
 	}
 
-	// 1. api_keysコレクションからドキュメント取得（Firestore風）
-	apiKey, exists := mockAPIKeys[tenantID]
-	if !exists || !apiKey.IsActive {
-		return nil, errors.New("API key not found or inactive")
+	ctx := context.Background()
+	doc, err := firestoreClient.Collection("api_keys").Doc(tenantID).Get(ctx)
+	if err != nil {
+		return nil, errors.New("API key not found")
 	}
 
-	// 2. シークレットハッシュ検証
+	var apiKey APIKey
+	if err := doc.DataTo(&apiKey); err != nil {
+		return nil, errors.New("failed to parse API key data")
+	}
+
+	if !apiKey.IsActive {
+		return nil, errors.New("API key is inactive")
+	}
+
 	expectedHash := hashSecret(secret)
 	if expectedHash != apiKey.SecretHash {
 		return nil, errors.New("invalid secret")
@@ -153,6 +188,15 @@ func getInstagramFollowers(tenantID string) int {
 }
 
 func main() {
+	if !metadata.OnGCE() {
+		godotenv.Load()
+	}
+
+	if err := initFirestore(); err != nil {
+		log.Fatalf("Firestore initialization failed: %v", err)
+	}
+	log.Println("Firestore client initialized")
+
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/api/instagram/followers", bearerTokenMiddleware(instagramFollowersHandler))
 
