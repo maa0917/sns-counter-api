@@ -19,7 +19,6 @@ import (
 )
 
 type Tenant struct {
-	TenantID      string `firestore:"tenant_id"`
 	Name          string `firestore:"name"`
 	IgUserID      string `firestore:"ig_user_id"`
 	IgAccessToken string `firestore:"ig_access_token"`
@@ -51,6 +50,16 @@ func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimPrefix(auth, "Bearer ")
+		tenantID, _, err := parseToken(token)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "Invalid token",
+			})
+			return
+		}
+
 		tenant, err := validateBearerToken(token)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -62,6 +71,7 @@ func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		ctx := context.WithValue(r.Context(), "tenant", tenant)
+		ctx = context.WithValue(ctx, "tenantID", tenantID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -166,7 +176,8 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenant := r.Context().Value("tenant").(*Tenant)
-	followerCount := getInstagramFollowers(tenant)
+	tenantID := r.Context().Value("tenantID").(string)
+	followerCount := getInstagramFollowers(tenantID, tenant)
 
 	response := map[string]int{
 		"count": followerCount,
@@ -177,9 +188,9 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getInstagramFollowers(tenant *Tenant) int {
+func getInstagramFollowers(tenantID string, tenant *Tenant) int {
 	if tenant.IgUserID == "" || tenant.IgAccessToken == "" {
-		log.Printf("Missing Instagram credentials for tenant %s", tenant.TenantID)
+		log.Printf("Missing Instagram credentials for tenant %s", tenantID)
 		return 0
 	}
 
@@ -188,13 +199,13 @@ func getInstagramFollowers(tenant *Tenant) int {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Printf("Failed to call Instagram API for tenant %s: %v", tenant.TenantID, err)
+		log.Printf("Failed to call Instagram API for tenant %s: %v", tenantID, err)
 		return 0
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Instagram API returned status %d for tenant %s", resp.StatusCode, tenant.TenantID)
+		log.Printf("Instagram API returned status %d for tenant %s", resp.StatusCode, tenantID)
 		return 0
 	}
 
@@ -203,7 +214,7 @@ func getInstagramFollowers(tenant *Tenant) int {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("Failed to decode Instagram API response for tenant %s: %v", tenant.TenantID, err)
+		log.Printf("Failed to decode Instagram API response for tenant %s: %v", tenantID, err)
 		return 0
 	}
 
