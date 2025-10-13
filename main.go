@@ -18,7 +18,7 @@ import (
 	"cloud.google.com/go/firestore"
 )
 
-type APIKey struct {
+type Tenant struct {
 	TenantID      string `firestore:"tenant_id"`
 	Name          string `firestore:"name"`
 	IgUserID      string `firestore:"ig_user_id"`
@@ -51,7 +51,7 @@ func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimPrefix(auth, "Bearer ")
-		apiKey, err := validateBearerToken(token)
+		tenant, err := validateBearerToken(token)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -61,7 +61,7 @@ func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "tenant", apiKey)
+		ctx := context.WithValue(r.Context(), "tenant", tenant)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -112,7 +112,7 @@ func initFirestore() error {
 	return nil
 }
 
-func validateBearerToken(token string) (*APIKey, error) {
+func validateBearerToken(token string) (*Tenant, error) {
 	tenantID, secret, err := parseToken(token)
 	if err != nil {
 		return nil, err
@@ -123,26 +123,26 @@ func validateBearerToken(token string) (*APIKey, error) {
 	}
 
 	ctx := context.Background()
-	doc, err := firestoreClient.Collection("api_keys").Doc(tenantID).Get(ctx)
+	doc, err := firestoreClient.Collection("tenants").Doc(tenantID).Get(ctx)
 	if err != nil {
 		return nil, errors.New("API key not found")
 	}
 
-	var apiKey APIKey
-	if err := doc.DataTo(&apiKey); err != nil {
+	var tenant Tenant
+	if err := doc.DataTo(&tenant); err != nil {
 		return nil, errors.New("failed to parse API key data")
 	}
 
-	if !apiKey.IsActive {
+	if !tenant.IsActive {
 		return nil, errors.New("API key is inactive")
 	}
 
 	expectedHash := hashSecret(secret)
-	if expectedHash != apiKey.SecretHash {
+	if expectedHash != tenant.SecretHash {
 		return nil, errors.New("invalid secret")
 	}
 
-	return &apiKey, nil
+	return &tenant, nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +165,8 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey := r.Context().Value("tenant").(*APIKey)
-	followerCount := getInstagramFollowers(apiKey)
+	tenant := r.Context().Value("tenant").(*Tenant)
+	followerCount := getInstagramFollowers(tenant)
 
 	response := map[string]int{
 		"count": followerCount,
@@ -177,24 +177,24 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getInstagramFollowers(apiKey *APIKey) int {
-	if apiKey.IgUserID == "" || apiKey.IgAccessToken == "" {
-		log.Printf("Missing Instagram credentials for tenant %s", apiKey.TenantID)
+func getInstagramFollowers(tenant *Tenant) int {
+	if tenant.IgUserID == "" || tenant.IgAccessToken == "" {
+		log.Printf("Missing Instagram credentials for tenant %s", tenant.TenantID)
 		return 0
 	}
 
 	url := fmt.Sprintf("https://graph.facebook.com/v23.0/%s?fields=followers_count&access_token=%s",
-		apiKey.IgUserID, apiKey.IgAccessToken)
+		tenant.IgUserID, tenant.IgAccessToken)
 
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Printf("Failed to call Instagram API for tenant %s: %v", apiKey.TenantID, err)
+		log.Printf("Failed to call Instagram API for tenant %s: %v", tenant.TenantID, err)
 		return 0
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Instagram API returned status %d for tenant %s", resp.StatusCode, apiKey.TenantID)
+		log.Printf("Instagram API returned status %d for tenant %s", resp.StatusCode, tenant.TenantID)
 		return 0
 	}
 
@@ -203,7 +203,7 @@ func getInstagramFollowers(apiKey *APIKey) int {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("Failed to decode Instagram API response for tenant %s: %v", apiKey.TenantID, err)
+		log.Printf("Failed to decode Instagram API response for tenant %s: %v", tenant.TenantID, err)
 		return 0
 	}
 
