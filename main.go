@@ -19,11 +19,12 @@ import (
 )
 
 type APIKey struct {
-	TenantID   string `firestore:"tenant_id"`
-	Name       string `firestore:"name"`
-	IgUserID   string `firestore:"ig_user_id"`
-	SecretHash string `firestore:"secret_hash"`
-	IsActive   bool   `firestore:"is_active"`
+	TenantID      string `firestore:"tenant_id"`
+	Name          string `firestore:"name"`
+	IgUserID      string `firestore:"ig_user_id"`
+	IgAccessToken string `firestore:"ig_access_token"`
+	SecretHash    string `firestore:"secret_hash"`
+	IsActive      bool   `firestore:"is_active"`
 }
 
 var firestoreClient *firestore.Client
@@ -165,7 +166,7 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiKey := r.Context().Value("tenant").(*APIKey)
-	followerCount := getInstagramFollowers(apiKey.TenantID)
+	followerCount := getInstagramFollowers(apiKey)
 
 	response := map[string]int{
 		"count": followerCount,
@@ -176,15 +177,37 @@ func instagramFollowersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getInstagramFollowers(tenantID string) int {
-	mockData := map[string]int{
-		"tenant123": 1234,
-		"demo456":   5678,
+func getInstagramFollowers(apiKey *APIKey) int {
+	if apiKey.IgUserID == "" || apiKey.IgAccessToken == "" {
+		log.Printf("Missing Instagram credentials for tenant %s", apiKey.TenantID)
+		return 0
 	}
-	if count, exists := mockData[tenantID]; exists {
-		return count
+
+	url := fmt.Sprintf("https://graph.facebook.com/v23.0/%s?fields=followers_count&access_token=%s",
+		apiKey.IgUserID, apiKey.IgAccessToken)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Failed to call Instagram API for tenant %s: %v", apiKey.TenantID, err)
+		return 0
 	}
-	return 0
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Instagram API returned status %d for tenant %s", resp.StatusCode, apiKey.TenantID)
+		return 0
+	}
+
+	var result struct {
+		FollowersCount int `json:"followers_count"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("Failed to decode Instagram API response for tenant %s: %v", apiKey.TenantID, err)
+		return 0
+	}
+
+	return result.FollowersCount
 }
 
 func main() {
