@@ -232,7 +232,7 @@ func main() {
 	log.Println("Firestore client initialized")
 
 	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/api/instagram/followers", bearerTokenMiddleware(instagramFollowersHandler))
+	http.HandleFunc("/api/v1/instagram/followers", bearerTokenMiddleware(instagramFollowersHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

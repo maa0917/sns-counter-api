@@ -62,7 +62,7 @@ Public endpoint for health monitoring.
 ### Instagram Followers
 
 ```
-GET /api/instagram/followers
+GET /api/v1/instagram/followers
 ```
 
 Protected endpoint that returns Instagram follower count for authenticated tenant.
@@ -135,12 +135,12 @@ Document ID: `tenant_id`
 # Test health check
 curl http://localhost:8080/health
 
-# Test Instagram followers endpoint
+# Test Instagram followers endpoint (v1)
 curl -H "Authorization: Bearer sk_live_tenant123_secretkey" \
-     http://localhost:8080/api/instagram/followers
+     http://localhost:8080/api/v1/instagram/followers
 
 # Test authentication failure
-curl http://localhost:8080/api/instagram/followers
+curl http://localhost:8080/api/v1/instagram/followers
 ```
 
 ## Architecture
