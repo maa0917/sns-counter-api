@@ -28,22 +28,32 @@ type Tenant struct {
 
 var firestoreClient *firestore.Client
 
-func getCORSOrigins() string {
-	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
-	if allowedOrigins == "" {
-		allowedOrigins = "http://localhost:3000,http://localhost:5173,http://localhost:8080"
+type Config struct {
+	AllowedOrigins string
+	Port           string
+	GCPProjectID   string
+}
+
+var config *Config
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-	return allowedOrigins
+	return defaultValue
+}
+
+func loadConfig() {
+	config = &Config{
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:8080"),
+		Port:           getEnv("PORT", "8080"),
+		GCPProjectID:   getEnv("GCP_PROJECT_ID", ""),
+	}
 }
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		allowedOrigins := getCORSOrigins()
-		if allowedOrigins == "" {
-			log.Printf("CORS: No allowed origins configured for production")
-			http.Error(w, "CORS not configured", http.StatusInternalServerError)
-			return
-		}
+		allowedOrigins := config.AllowedOrigins
 
 		origin := r.Header.Get("Origin")
 		isAllowed := false
@@ -146,8 +156,8 @@ func getProjectID() (string, error) {
 		return "", errors.New("failed to get project ID from GCE metadata service")
 	}
 
-	if id := os.Getenv("GCP_PROJECT_ID"); id != "" {
-		return id, nil
+	if config.GCPProjectID != "" {
+		return config.GCPProjectID, nil
 	}
 	return "", errors.New("GCP_PROJECT_ID environment variable is required for local development")
 }
@@ -273,6 +283,8 @@ func main() {
 		godotenv.Load()
 	}
 
+	loadConfig()
+
 	if err := initFirestore(); err != nil {
 		log.Fatalf("Firestore initialization failed: %v", err)
 	}
@@ -281,9 +293,6 @@ func main() {
 	http.HandleFunc("/health", corsMiddleware(healthHandler))
 	http.HandleFunc("/api/v1/followers/count", corsMiddleware(bearerTokenMiddleware(instagramFollowersHandler)))
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	port := config.Port
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
