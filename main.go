@@ -28,6 +28,53 @@ type Tenant struct {
 
 var firestoreClient *firestore.Client
 
+func getCORSOrigins() string {
+	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = "http://localhost:3000,http://localhost:5173,http://localhost:8080"
+	}
+	return allowedOrigins
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		allowedOrigins := getCORSOrigins()
+		if allowedOrigins == "" {
+			log.Printf("CORS: No allowed origins configured for production")
+			http.Error(w, "CORS not configured", http.StatusInternalServerError)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		isAllowed := false
+
+		if origin != "" {
+			for _, allowedOrigin := range strings.Split(allowedOrigins, ",") {
+				if strings.TrimSpace(allowedOrigin) == origin {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					isAllowed = true
+					break
+				}
+			}
+
+			if !isAllowed {
+				log.Printf("CORS: Origin '%s' not allowed", origin)
+			}
+		}
+
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
+
 func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -231,8 +278,8 @@ func main() {
 	}
 	log.Println("Firestore client initialized")
 
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/api/v1/instagram/followers", bearerTokenMiddleware(instagramFollowersHandler))
+	http.HandleFunc("/health", corsMiddleware(healthHandler))
+	http.HandleFunc("/api/v1/instagram/followers", corsMiddleware(bearerTokenMiddleware(instagramFollowersHandler)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
