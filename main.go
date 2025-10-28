@@ -279,7 +279,7 @@ func main() {
 	log.Println("Firestore client initialized")
 
 	http.HandleFunc("/health", corsMiddleware(healthHandler))
-	http.HandleFunc("/api/v1/instagram/followers", corsMiddleware(bearerTokenMiddleware(instagramFollowersHandler)))
+	http.HandleFunc("/api/v1/followers/count", corsMiddleware(bearerTokenMiddleware(instagramFollowersHandler)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
