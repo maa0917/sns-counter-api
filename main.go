@@ -26,15 +26,16 @@ type Tenant struct {
 	IsActive      bool   `firestore:"is_active"`
 }
 
-var firestoreClient *firestore.Client
-
 type Config struct {
 	AllowedOrigins string
 	Port           string
 	GCPProjectID   string
 }
 
-var config *Config
+type App struct {
+	config    *Config
+	firestore *firestore.Client
+}
 
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
@@ -43,17 +44,17 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func loadConfig() {
-	config = &Config{
+func loadConfig() *Config {
+	return &Config{
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:8080"),
 		Port:           getEnv("PORT", "8080"),
 		GCPProjectID:   getEnv("GCP_PROJECT_ID", ""),
 	}
 }
 
-func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (app *App) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		allowedOrigins := config.AllowedOrigins
+		allowedOrigins := app.config.AllowedOrigins
 
 		origin := r.Header.Get("Origin")
 		isAllowed := false
@@ -85,7 +86,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (app *App) bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if auth == "" {
@@ -117,7 +118,7 @@ func bearerTokenMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		tenant, err := validateBearerToken(token)
+		tenant, err := app.validateBearerToken(token)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -146,51 +147,46 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func getProjectID() (string, error) {
+func initFirestore(config *Config) (*firestore.Client, error) {
+	ctx := context.Background()
+
+	var projectID string
 	if metadata.OnGCE() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if id, err := metadata.ProjectIDWithContext(ctx); err == nil {
-			return id, nil
+			projectID = id
+		} else {
+			return nil, errors.New("failed to get project ID from GCE metadata service")
 		}
-		return "", errors.New("failed to get project ID from GCE metadata service")
-	}
-
-	if config.GCPProjectID != "" {
-		return config.GCPProjectID, nil
-	}
-	return "", errors.New("GCP_PROJECT_ID environment variable is required for local development")
-}
-
-func initFirestore() error {
-	ctx := context.Background()
-
-	projectID, err := getProjectID()
-	if err != nil {
-		return fmt.Errorf("project ID resolution failed: %v", err)
+	} else {
+		if config.GCPProjectID != "" {
+			projectID = config.GCPProjectID
+		} else {
+			return nil, errors.New("GCP_PROJECT_ID environment variable is required for local development")
+		}
 	}
 
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
-		return fmt.Errorf("failed to create Firestore client: %v", err)
+		return nil, fmt.Errorf("failed to create Firestore client: %v", err)
 	}
 
-	firestoreClient = client
-	return nil
+	return client, nil
 }
 
-func validateBearerToken(token string) (*Tenant, error) {
+func (app *App) validateBearerToken(token string) (*Tenant, error) {
 	tenantID, secret, err := parseToken(token)
 	if err != nil {
 		return nil, err
 	}
 
-	if firestoreClient == nil {
+	if app.firestore == nil {
 		return nil, errors.New("firestore not configured")
 	}
 
 	ctx := context.Background()
-	doc, err := firestoreClient.Collection("tenants").Doc(tenantID).Get(ctx)
+	doc, err := app.firestore.Collection("tenants").Doc(tenantID).Get(ctx)
 	if err != nil {
 		return nil, errors.New("API key not found")
 	}
@@ -283,16 +279,21 @@ func main() {
 		godotenv.Load()
 	}
 
-	loadConfig()
+	config := loadConfig()
 
-	if err := initFirestore(); err != nil {
+	firestoreClient, err := initFirestore(config)
+	if err != nil {
 		log.Fatalf("Firestore initialization failed: %v", err)
 	}
 	log.Println("Firestore client initialized")
 
-	http.HandleFunc("/health", corsMiddleware(healthHandler))
-	http.HandleFunc("/api/v1/followers/count", corsMiddleware(bearerTokenMiddleware(instagramFollowersHandler)))
+	app := &App{
+		config:    config,
+		firestore: firestoreClient,
+	}
 
-	port := config.Port
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	http.HandleFunc("/health", app.corsMiddleware(healthHandler))
+	http.HandleFunc("/api/v1/followers/count", app.corsMiddleware(app.bearerTokenMiddleware(instagramFollowersHandler)))
+
+	log.Fatal(http.ListenAndServe(":"+config.Port, nil))
 }
