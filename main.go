@@ -274,6 +274,47 @@ func getInstagramFollowers(tenantID string, tenant *Tenant) int {
 	return result.FollowersCount
 }
 
+// platformSettingsHandler handles platform settings GET/POST (STUB implementation)
+func platformSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		response := map[string]string{
+			"platform": "instagram",
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+
+	case http.MethodPost:
+		var requestBody struct {
+			Platform string `json:"platform"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "Invalid JSON body",
+			})
+			return
+		}
+
+		// STUB: Just return success without actually updating anything
+		response := map[string]string{
+			"message":  "Platform updated successfully",
+			"platform": requestBody.Platform,
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "Method not allowed",
+		})
+	}
+}
+
 func main() {
 	if !metadata.OnGCE() {
 		godotenv.Load()
@@ -294,6 +335,7 @@ func main() {
 
 	http.HandleFunc("/health", app.corsMiddleware(healthHandler))
 	http.HandleFunc("/api/v1/followers/count", app.corsMiddleware(app.bearerTokenMiddleware(instagramFollowersHandler)))
+	http.HandleFunc("/api/v1/settings/platform", app.corsMiddleware(app.bearerTokenMiddleware(platformSettingsHandler)))
 
 	log.Fatal(http.ListenAndServe(":"+config.Port, nil))
 }
