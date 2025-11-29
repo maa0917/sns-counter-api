@@ -7,9 +7,9 @@ authentication with Firestore backend and returns simple JSON responses optimize
 
 ### Prerequisites
 
-- Go 1.19 or later
+- Go 1.24 or later
 - Google Cloud Project with Firestore enabled
-- Service account credentials (for local development)
+- Google Cloud CLI with Application Default Credentials configured
 
 ### Installation
 
@@ -19,13 +19,13 @@ authentication with Firestore backend and returns simple JSON responses optimize
    go mod tidy
    ```
 
-3. Set up environment variables:
+3. Set up authentication and environment:
    ```bash
+   # Configure Google Cloud authentication
+   gcloud auth application-default login
+   
    # Create .env file for local development
    echo "GCP_PROJECT_ID=your-project-id" > .env
-   
-   # Set Google Cloud credentials (if not using GCE)
-   export GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
    ```
 
 ### Running the Server
@@ -39,6 +39,19 @@ PORT=8081 go run main.go
 
 # Build binary
 go build -o sns-counter-api main.go
+```
+
+### Running with Docker
+
+```bash
+# Build Docker image
+docker build -t sns-counter-api .
+
+# Run with Application Default Credentials
+docker run --rm -p 8080:8080 \
+  -e GCP_PROJECT_ID=your-project-id \
+  -v $HOME/.config/gcloud:/home/nonroot/.config/gcloud:ro \
+  sns-counter-api
 ```
 
 ## API Endpoints
